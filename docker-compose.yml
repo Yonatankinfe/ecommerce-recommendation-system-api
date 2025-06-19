@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  api:
+    build: . # Build the image from the Dockerfile in the current directory
+    container_name: ecommerce_recsys_api
+    ports:
+      - "8000:8000" # Map port 8000 on the host to port 8000 in the container
+    volumes:
+      # Mount the src directory for live code changes during development (optional)
+      # For production, you might remove this or use a different approach.
+      - ./src:/app/src
+      # Mount the html directory (if serving static files via FastAPI, or for reference)
+      - ./html:/app/html
+      # Mount the models_store directory to persist trained models outside the container
+      - ./models_store:/app/models_store
+    environment:
+      # Example of environment variables, if needed by your application
+      # - PYTHONUNBUFFERED=1 # Ensures print statements appear directly in logs
+      - TF_ENABLE_ONEDNN_OPTS=0 # Mitigates a potential TensorFlow warning with some CPUs
+    # command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload # Use if you want uvicorn to auto-reload on code changes
+
+networks:
+  default:
+    name: ecommerce_recsys_network
