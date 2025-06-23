@@ -5,7 +5,7 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.optimizers import Adam
 import tensorflow as tf # Added for AUC
 
-from model import create_ncf_model # Assuming model.py is in the same directory or src is in PYTHONPATH
+from .model import create_ncf_model # Assuming model.py is in the same directory or src is in PYTHONPATH
 
 # --- Configuration ---
 DEFAULT_EMBEDDING_DIM = 32

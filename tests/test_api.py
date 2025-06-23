@@ -9,19 +9,18 @@ from fastapi.testclient import TestClient # Can use this for sync tests if prefe
 # Assuming your FastAPI app instance is named 'app' in 'src.main'
 from src.main import app, API_KEYS_DB, MODELS_BASE_DIR
 
-# Use pytest-asyncio for async tests with httpx
-pytestmark = pytest.mark.asyncio
+# Use FastAPI's TestClient for synchronous testing.
+# pytestmark = pytest.mark.asyncio # Not needed for TestClient
 
-
-# Fixture for the AsyncClient
-@pytest.fixture(scope="module")
-async def client():
-    async with AsyncClient(app=app, base_url="http://127.0.0.1:8000") as ac: # Base URL must match server
-        yield ac
+# Fixture for the TestClient
+@pytest.fixture(scope="function")
+def client(): # Synchronous fixture
+    with TestClient(app) as c: # base_url is implicitly handled by TestClient(app)
+        yield c
 
 # Fixture to create a dummy CSV for uploading during tests
 @pytest.fixture(scope="module")
-def dummy_train_csv_path(tmpdir_factory):
+def dummy_files_fixture(tmpdir_factory): # Renamed fixture
     data = {
         'user_id': ['u1', 'u1', 'u2', 'u2', 'u3', 'u4', 'u5', 'u1', 'u2', 'u3', 'u4', 'u5'],
         'item_id': ['i1', 'i2', 'i1', 'i3', 'i4', 'i5', 'i1', 'i3', 'i2', 'i2', 'i4', 'i3'],
@@ -29,9 +28,39 @@ def dummy_train_csv_path(tmpdir_factory):
     }
     df = pd.DataFrame(data)
     # Use tmpdir_factory for module-scoped temporary directory
-    file_path = tmpdir_factory.mktemp("data").join("test_train_data.csv")
+    temp_dir = tmpdir_factory.mktemp("data")
+    file_path = temp_dir.join("test_train_data.csv")
     df.to_csv(file_path, index=False)
-    return str(file_path)
+
+    # Create an empty CSV
+    empty_file_path = temp_dir.join("empty.csv")
+    open(empty_file_path, 'w').close()
+
+    # Create a non-CSV file (e.g., binary or just text)
+    non_csv_file_path = temp_dir.join("not_a_csv.txt")
+    with open(non_csv_file_path, 'w') as f:
+        f.write("This is not a CSV file.")
+
+    # Create CSV with missing user_id column
+    missing_user_data = {'item_id': ['i1', 'i2'], 'interaction_score': [1,0]}
+    missing_user_df = pd.DataFrame(missing_user_data)
+    missing_user_path = temp_dir.join("missing_user.csv")
+    missing_user_df.to_csv(missing_user_path, index=False)
+
+    # Create CSV with missing item_id column
+    missing_item_data = {'user_id': ['u1', 'u2'], 'interaction_score': [1,0]}
+    missing_item_df = pd.DataFrame(missing_item_data)
+    missing_item_path = temp_dir.join("missing_item.csv")
+    missing_item_df.to_csv(missing_item_path, index=False)
+
+
+    return {
+        "valid": str(file_path),
+        "empty": str(empty_file_path),
+        "non_csv": str(non_csv_file_path),
+        "missing_user": str(missing_user_path),
+        "missing_item": str(missing_item_path),
+    }
 
 # Cleanup MODELS_BASE_DIR after tests run
 @pytest.fixture(scope="session", autouse=True)
@@ -80,15 +109,15 @@ def cleanup_model_store():
         pass # Let main.py handle its "testkey123" setup on next app load if needed.
 
 
-async def test_root_endpoint(client: AsyncClient):
-    response = await client.get("/")
+def test_root_endpoint(client: TestClient): # Sync, TestClient
+    response = client.get("/") # No await
     assert response.status_code == 200
     assert response.json() == {"message": "Welcome to the E-commerce Recommendation System API. See /docs for API details."}
 
-async def test_train_endpoint(client: AsyncClient, dummy_train_csv_path):
-    with open(dummy_train_csv_path, 'rb') as f:
+def test_train_endpoint_success(client: TestClient, dummy_files_fixture): # Sync, TestClient
+    with open(dummy_files_fixture["valid"], 'rb') as f:
         files = {'training_data': ('test_train_data.csv', f, 'text/csv')}
-        response = await client.post("/v1/train", files=files)
+        response = client.post("/v1/train", files=files) # No await
 
     assert response.status_code == 200
     data = response.json()
@@ -104,16 +133,54 @@ async def test_train_endpoint(client: AsyncClient, dummy_train_csv_path):
     assert os.path.exists(API_KEYS_DB[api_key]["model_path"])
     assert os.path.exists(API_KEYS_DB[api_key]["mappings_path"])
 
+def test_train_endpoint_empty_csv(client: TestClient, dummy_files_fixture):
+    with open(dummy_files_fixture["empty"], 'rb') as f:
+        files = {'training_data': ('empty.csv', f, 'text/csv')}
+        response = client.post("/v1/train", files=files)
+    # Based on current train.py, this will lead to num_users=0, num_items=0
+    # which then leads to "Processed data is empty or no users/items found"
+    # Update: main.py's general exception handler catches pd.errors.EmptyDataError from load_and_preprocess_data
+    # and returns a 500.
+    assert response.status_code == 500 # Internal Server Error due to unhandled pandas EmptyDataError
+    detail = response.json().get("detail", "").lower()
+    assert "error occurred during training" in detail # Generic message from main.py
+    assert "no columns to parse from file" in detail # Specific pandas error propagated
 
-async def test_recommendations_endpoint_no_auth(client: AsyncClient):
-    response = await client.post("/v1/recommendations", json={"user_id": "u1", "count": 5})
+def test_train_endpoint_malformed_csv(client: TestClient, dummy_files_fixture):
+    with open(dummy_files_fixture["non_csv"], 'rb') as f:
+        files = {'training_data': ('not_a_csv.txt', f, 'text/csv')} # Content-Type is still csv
+        response = client.post("/v1/train", files=files)
+    # This should fail during pd.read_csv() in load_and_preprocess_data
+    assert response.status_code == 500 # Or 400 if pandas error is caught specifically
+    # The specific error message might vary depending on pandas version and error handling in train.py
+    # For now, check for a generic server error or a more specific parsing error if possible.
+    # Example: "An error occurred during training: Error tokenizing data."
+    assert "error occurred during training" in response.json().get("detail", "").lower()
+
+def test_train_endpoint_missing_user_id_column(client: TestClient, dummy_files_fixture):
+    with open(dummy_files_fixture["missing_user"], 'rb') as f:
+        files = {'training_data': ('missing_user.csv', f, 'text/csv')}
+        response = client.post("/v1/train", files=files)
+    assert response.status_code == 500 # load_and_preprocess_data raises KeyError, caught by general Exception
+    assert "error occurred during training" in response.json().get("detail", "").lower()
+    # To be more specific, we'd need to ensure KeyError leads to a 4xx error in main.py
+    # Currently, it's a general 500: "An error occurred during training: 'user_id'"
+
+def test_train_endpoint_missing_item_id_column(client: TestClient, dummy_files_fixture):
+    with open(dummy_files_fixture["missing_item"], 'rb') as f:
+        files = {'training_data': ('missing_item.csv', f, 'text/csv')}
+        response = client.post("/v1/train", files=files)
+    assert response.status_code == 500 # Similar to missing user_id
+    assert "error occurred during training" in response.json().get("detail", "").lower()
+
+def test_recommendations_endpoint_no_auth(client: TestClient):
+    response = client.post("/v1/recommendations", json={"user_id": "u1", "count": 5})
     assert response.status_code == 403
     detail = response.json().get("detail", "").lower()
     assert "not authenticated" in detail or "could not validate credentials" in detail
 
-
-async def test_recommendations_endpoint_bad_auth(client: AsyncClient):
-    response = await client.post(
+def test_recommendations_endpoint_bad_auth(client: TestClient):
+    response = client.post(
         "/v1/recommendations",
         json={"user_id": "u1", "count": 5},
         headers={"X-API-Key": "fakekey"}
@@ -121,13 +188,12 @@ async def test_recommendations_endpoint_bad_auth(client: AsyncClient):
     assert response.status_code == 403
     assert "Could not validate credentials" in response.json().get("detail", "")
 
-
-async def test_recommendations_endpoint_with_trained_model(client: AsyncClient, dummy_train_csv_path):
+def test_recommendations_endpoint_with_trained_model_success(client: TestClient, dummy_files_fixture):
     api_key_to_use = None
 
-    with open(dummy_train_csv_path, 'rb') as f:
+    with open(dummy_files_fixture["valid"], 'rb') as f:
         files = {'training_data': ('test_train_data.csv', f, 'text/csv')}
-        train_response = await client.post("/v1/train", files=files)
+        train_response = client.post("/v1/train", files=files)
 
     assert train_response.status_code == 200, f"Training failed: {train_response.text}"
     train_data = train_response.json()
@@ -135,9 +201,10 @@ async def test_recommendations_endpoint_with_trained_model(client: AsyncClient, 
 
     assert api_key_to_use is not None
 
-    rec_response = await client.post(
+    # Ensure user 'u1' is in the valid training data
+    rec_response = client.post(
         "/v1/recommendations",
-        json={"user_id": "u1", "count": 3}, # u1 is in dummy_train_csv_path
+        json={"user_id": "u1", "count": 3},
         headers={"X-API-Key": api_key_to_use}
     )
 
@@ -151,14 +218,85 @@ async def test_recommendations_endpoint_with_trained_model(client: AsyncClient, 
         assert "item_id" in rec_data["recommendations"][0]
         assert "score" in rec_data["recommendations"][0]
 
-async def test_recommendation_for_unknown_user(client: AsyncClient, dummy_train_csv_path):
-    with open(dummy_train_csv_path, 'rb') as f:
+def test_recommendations_missing_model_file(client: TestClient, dummy_files_fixture):
+    # 1. Train a model
+    with open(dummy_files_fixture["valid"], 'rb') as f:
         files = {'training_data': ('test_train_data.csv', f, 'text/csv')}
-        train_response = await client.post("/v1/train", files=files)
+        train_response = client.post("/v1/train", files=files)
+    assert train_response.status_code == 200
+    train_data = train_response.json()
+    api_key = train_data["api_key"]
+    model_path = train_data["model_path"]
+
+    # 2. Delete the model file
+    if os.path.exists(model_path):
+        os.remove(model_path)
+
+    # 3. Try to get recommendations
+    response = client.post(
+        "/v1/recommendations",
+        json={"user_id": "u1", "count": 5},
+        headers={"X-API-Key": api_key}
+    )
+    assert response.status_code == 404 # Model file not found
+    expected_detail_substring = "model or mappings not found for this api key"
+    assert expected_detail_substring in response.json().get("detail", "").lower()
+
+def test_recommendations_missing_mappings_file(client: TestClient, dummy_files_fixture):
+    # 1. Train a model
+    with open(dummy_files_fixture["valid"], 'rb') as f:
+        files = {'training_data': ('test_train_data.csv', f, 'text/csv')}
+        train_response = client.post("/v1/train", files=files)
+    assert train_response.status_code == 200
+    train_data = train_response.json()
+    api_key = train_data["api_key"]
+    mappings_path = train_data["mappings_path"]
+
+    # 2. Delete the mappings file
+    if os.path.exists(mappings_path):
+        os.remove(mappings_path)
+
+    # 3. Try to get recommendations
+    response = client.post(
+        "/v1/recommendations",
+        json={"user_id": "u1", "count": 5},
+        headers={"X-API-Key": api_key}
+    )
+    assert response.status_code == 404 # Mappings file not found
+    expected_detail_substring = "model or mappings not found for this api key"
+    assert expected_detail_substring in response.json().get("detail", "").lower()
+
+def test_recommendations_corrupted_mappings_file(client: TestClient, dummy_files_fixture):
+    # 1. Train a model
+    with open(dummy_files_fixture["valid"], 'rb') as f:
+        files = {'training_data': ('test_train_data.csv', f, 'text/csv')}
+        train_response = client.post("/v1/train", files=files)
+    assert train_response.status_code == 200
+    train_data = train_response.json()
+    api_key = train_data["api_key"]
+    mappings_path = train_data["mappings_path"]
+
+    # 2. Corrupt the mappings file (write invalid JSON)
+    with open(mappings_path, 'w') as f:
+        f.write("this is not valid json")
+
+    # 3. Try to get recommendations
+    response = client.post(
+        "/v1/recommendations",
+        json={"user_id": "u1", "count": 5},
+        headers={"X-API-Key": api_key}
+    )
+    assert response.status_code == 500 # Error loading mappings
+    assert "error loading model/mappings" in response.json().get("detail", "").lower()
+
+def test_recommendation_for_unknown_user(client: TestClient, dummy_files_fixture):
+    with open(dummy_files_fixture["valid"], 'rb') as f:
+        files = {'training_data': ('test_train_data.csv', f, 'text/csv')}
+        train_response = client.post("/v1/train", files=files)
     assert train_response.status_code == 200, f"Training failed: {train_response.text}"
     api_key = train_response.json()["api_key"]
 
-    response = await client.post(
+    response = client.post(
         "/v1/recommendations",
         json={"user_id": "unknown_user_id_qwerty", "count": 5},
         headers={"X-API-Key": api_key}
@@ -166,7 +304,7 @@ async def test_recommendation_for_unknown_user(client: AsyncClient, dummy_train_
     assert response.status_code == 404
     assert "not found in the model's user mapping" in response.json().get("detail", "")
 
-async def test_recommendation_with_testkey123_if_model_exists(client: AsyncClient):
+def test_recommendation_with_testkey123_if_model_exists(client: TestClient):
     # This test relies on the dummy model setup for 'testkey123' in main.py
     # It checks if the pre-configured 'testkey123' can return recommendations.
     # This test might fail if the dummy model in main.py is just a placeholder file
@@ -200,7 +338,7 @@ async def test_recommendation_with_testkey123_if_model_exists(client: AsyncClien
          print("Warning: num_users not set for testkey123. Assuming user0 exists for test.")
 
 
-    response = await client.post(
+    response = client.post( # Removed await
         "/v1/recommendations",
         json={"user_id": user_to_test, "count": 2},
         headers={"X-API-Key": "testkey123"}

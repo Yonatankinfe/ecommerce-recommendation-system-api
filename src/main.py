@@ -11,9 +11,9 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 
 # Assuming train.py and model.py are in the same src directory
-from train import load_and_preprocess_data, train_model, save_mappings, load_mappings
+from .train import load_and_preprocess_data, train_model, save_mappings, load_mappings
 # create_ncf_model is not directly used by main.py for inference if model is loaded
-# from model import create_ncf_model
+# from .model import create_ncf_model # Keep this commented unless needed by main directly
 
 # --- Configuration & Globals ---
 API_KEY_NAME = "X-API-Key"
@@ -237,7 +237,7 @@ if __name__ == "__main__":
                     # So, we'll create a dummy model using Keras and save it.
                     # This requires model.py to be importable.
                     try:
-                        from model import create_ncf_model
+                        from .model import create_ncf_model # Relative import
                         temp_model = create_ncf_model(dummy_users_count, dummy_items_count, embedding_dim=4) # minimal
                         temp_model.save(_dummy_model_path)
                         print(f"Dummy Keras model saved to {_dummy_model_path}")
