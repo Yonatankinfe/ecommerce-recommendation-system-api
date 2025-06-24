@@ -12,7 +12,7 @@ This project provides a "model-as-a-service" API for generating product recommen
 *   **API Key Authentication:** Secure access to the recommendation service.
 *   **Containerized:** Easy to deploy using Docker.
 
-## 🛠️ How it Works
+## 🛠️ How it Works 🛠️
 
 The system consists of three main components:
 
@@ -45,7 +45,7 @@ The system consists of three main components:
         *   Returns the top N recommended `item_id`s.
     *   (Future: In-memory caching for frequently accessed models and user recommendations).
 
-## Getting Started (High-Level)
+## 🚀 Getting Started (High-Level) 🚀
 
 1.  **Prepare your data:** Create a CSV file with columns `user_id`, `item_id`, and optionally `interaction_score`, `timestamp`.
 2.  **Train a model:** Send a `POST` request to `/v1/train` with your CSV data. You'll receive an API key.
