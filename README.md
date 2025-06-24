@@ -2,7 +2,7 @@
 
 This project provides a "model-as-a-service" API for generating product recommendations based on user interaction data. It uses a Neural Collaborative Filtering (NCF) model.
 
-## Features
+## ✨ Features ✨
 
 *   **Trainable Recommendation Model:** Upload your own dataset (CSV format) to train a custom recommendation model.
 *   **NCF Architecture:** Utilizes a hybrid Neural Collaborative Filtering model to capture both linear and non-linear user-item interactions.
