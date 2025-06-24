@@ -12,7 +12,7 @@ This project provides a "model-as-a-service" API for generating product recommen
 *   **API Key Authentication:** Secure access to the recommendation service.
 *   **Containerized:** Easy to deploy using Docker.
 
-## How it Works
+## 🛠️ How it Works
 
 The system consists of three main components:
 
